@@ -3,6 +3,7 @@ DAG Airflow — Collecte horaire des posts sociaux
 - Lance le collecteur toutes les heures
 - Consomme Kafka → MinIO Bronze (Parquet)
 - Nettoyage Silver : déduplication, détection langue, normalisation texte
+- NLP : sentiment Qwen3:8b + BERTopic → MongoDB
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ default_args = {
 }
 
 
-# ── Tâche 1 : lancer le collecteur ───────────────────────────────────────────
+# ── Tâche 1 : lancer le collecteur ──────────────────────────────────────────
 
 def task_collect(**context):
     import sys
@@ -40,7 +41,7 @@ def task_collect(**context):
     run_once()
 
 
-# ── Tâche 2 : consommer Kafka → MinIO Bronze ─────────────────────────────────
+# ── Tâche 2 : consommer Kafka → MinIO Bronze ────────────────────────────────
 
 def task_kafka_to_bronze(**context):
     """Lit les messages Kafka et les écrit en Parquet partitionné dans MinIO."""
@@ -89,7 +90,7 @@ def task_kafka_to_bronze(**context):
     log.info("Bronze : %d documents écrits dans %s", len(records), partition_path)
 
 
-# ── Tâche 3 : nettoyage Bronze → Silver ──────────────────────────────────────
+# ── Tâche 3 : nettoyage Bronze → Silver ─────────────────────────────────────
 
 def task_bronze_to_silver(**context):
     """Lit le Bronze Parquet de la partition courante et produit la couche Silver."""
@@ -107,16 +108,34 @@ def task_bronze_to_silver(**context):
     log.info("Silver : %d documents nettoyés.", count)
 
 
-# ── DAG ───────────────────────────────────────────────────────────────────────
+# ── Tâche 4 : NLP Silver → MongoDB ──────────────────────────────────────────
+
+def task_silver_to_nlp(**context):
+    """Enrichit la couche Silver : sentiment Qwen3:8b + topics BERTopic → MongoDB."""
+    import sys
+    sys.path.insert(0, "/opt/airflow/notebooks/nlp")
+    from nlp_pipeline import run_nlp_for_partition
+
+    execution_date: datetime = context["execution_date"]
+    count = run_nlp_for_partition(
+        execution_date.year,
+        execution_date.month,
+        execution_date.day,
+        execution_date.hour,
+    )
+    log.info("NLP : %d documents enrichis dans MongoDB.", count)
+
+
+# ── DAG ──────────────────────────────────────────────────────────────────────
 
 with DAG(
     dag_id="dag_collecte_sociale",
-    description="Collecte horaire posts sociaux → Kafka → Bronze → Silver MinIO",
+    description="Collecte horaire posts sociaux → Kafka → Bronze → Silver → NLP → MongoDB",
     schedule_interval="@hourly",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=default_args,
-    tags=["grp3", "collecte", "bronze", "silver"],
+    tags=["grp3", "collecte", "bronze", "silver", "nlp"],
 ) as dag:
 
     collect = PythonOperator(
@@ -134,4 +153,9 @@ with DAG(
         python_callable=task_bronze_to_silver,
     )
 
-    collect >> kafka_to_bronze >> bronze_to_silver
+    silver_to_nlp = PythonOperator(
+        task_id="silver_vers_nlp",
+        python_callable=task_silver_to_nlp,
+    )
+
+    collect >> kafka_to_bronze >> bronze_to_silver >> silver_to_nlp
