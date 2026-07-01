@@ -1,0 +1,128 @@
+# docker-compose.yml — Projet 3 Sentiment & Tendances — Groupe 3
+# Ports modifiés pour éviter les conflits avec un stack Hadoop existant :
+#   MinIO API  : 9000 → 9002   |  MinIO Console : 9001 → 9003
+#   Superset   : 8088 → 8089
+
+services:
+
+  # ── Objet storage (Bronze / Silver / Gold) ───────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: grp3-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio12345
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: grp3-minio-init
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minio minio12345;
+      mc mb -p local/bronze local/silver local/gold;
+      exit 0;"
+
+  # ── Base relationnelle (Gold agrégats + Airflow metadata) ────────────────
+  postgres:
+    image: postgres:16
+    container_name: grp3-postgres
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app12345
+      POSTGRES_DB: gold
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  # ── Orchestrateur ────────────────────────────────────────────────────────
+  airflow:
+    build:
+      context: ./infra/airflow
+      dockerfile: Dockerfile
+    container_name: grp3-airflow
+    depends_on: [postgres, minio, kafka, mongo, ollama]
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://app:app12345@postgres/gold
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      MINIO_ENDPOINT: http://minio:9000
+      KAFKA_BOOTSTRAP: kafka:9092
+      MONGO_URI: mongodb://app:app12345@mongo:27017/?authSource=admin
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen3:8b
+      MATCH_EVENTS_PATH: /opt/airflow/data/match_events.csv
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./collector:/opt/airflow/collector
+      - ./notebooks:/opt/airflow/notebooks
+      - ./data:/opt/airflow/data
+    command: standalone
+
+  # ── Dashboard ────────────────────────────────────────────────────────────
+  superset:
+    image: apache/superset:latest
+    container_name: grp3-superset
+    environment:
+      SUPERSET_SECRET_KEY: grp3_change_me
+    ports:
+      - "8089:8088"
+    volumes:
+      - superset_home:/app/superset_home
+
+  # ── LLM local (résumés de tendances) ─────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: grp3-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU NVIDIA — commenter le bloc deploy si pas de carte (qwen3:8b tourne en CPU, plus lent)
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+
+  # ── Tampon d'ingestion ───────────────────────────────────────────────────
+  kafka:
+    image: bitnamilegacy/kafka:3.7.0
+    container_name: grp3-kafka
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+
+  # ── Stockage documentaire (posts enrichis NLP) ───────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: grp3-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: app
+      MONGO_INITDB_ROOT_PASSWORD: app12345
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  minio_data:
+  pg_data:
+  superset_home:
+  ollama_data:
+  mongo_data:

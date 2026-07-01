@@ -1,0 +1,4 @@
+match_id,event_type,event_minute,event_timestamp,team_home,team_away,description
+wc2026-fr-pt,kickoff,0,2026-07-01T12:00:00+00:00,France,Portugal,Coup d'envoi
+wc2026-fr-pt,red_card,55,2026-07-01T12:55:00+00:00,France,Portugal,Carton rouge controversé
+wc2026-fr-pt,goal,78,2026-07-01T13:18:00+00:00,France,Portugal,But décisif 78e minute
