@@ -14,10 +14,10 @@ Pipeline batch d'analyse de sentiment sur les réseaux sociaux pendant la Coupe 
 
 | Personne | Module | Dossier |
 |----------|--------|---------|
-| Marcus | Infrastructure + Collecte | `docker-compose.yml`, `collector/`, `dags/` |
-| P2 | Ingestion Bronze/Silver | `notebooks/silver/` |
-| P3 | NLP (Sentiment + Topics) | `notebooks/nlp/` |
-| P4 | Gold + Dashboard Superset | `notebooks/gold/`, `superset/` |
+| Marcus LINGUET | Infrastructure + Collecte | `docker-compose.yml`, `collector/`, `dags/` |
+| Hassan HOUSSEIN HOUMED | Ingestion Bronze/Silver | `notebooks/silver/` |
+| Hedi MATHLOUTHI | NLP (Sentiment + Topics) | `notebooks/nlp/` |
+| Meissa MARA | Gold + Dashboard Superset | `notebooks/gold/`, `superset/` |
 
 ## Démarrage rapide
 
