@@ -1,0 +1,5 @@
+pyarrow>=14.0
+s3fs>=2024.2
+langdetect>=1.0.9
+spacy>=3.7
+kafka-python>=2.0

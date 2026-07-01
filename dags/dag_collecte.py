@@ -2,6 +2,7 @@
 DAG Airflow — Collecte horaire des posts sociaux
 - Lance le collecteur toutes les heures
 - Consomme Kafka → MinIO Bronze (Parquet)
+- Nettoyage Silver : déduplication, détection langue, normalisation texte
 """
 
 from __future__ import annotations
@@ -88,16 +89,34 @@ def task_kafka_to_bronze(**context):
     log.info("Bronze : %d documents écrits dans %s", len(records), partition_path)
 
 
+# ── Tâche 3 : nettoyage Bronze → Silver ──────────────────────────────────────
+
+def task_bronze_to_silver(**context):
+    """Lit le Bronze Parquet de la partition courante et produit la couche Silver."""
+    import sys
+    sys.path.insert(0, "/opt/airflow/notebooks/silver")
+    from silver_cleaning import run_silver_for_partition
+
+    execution_date: datetime = context["execution_date"]
+    count = run_silver_for_partition(
+        execution_date.year,
+        execution_date.month,
+        execution_date.day,
+        execution_date.hour,
+    )
+    log.info("Silver : %d documents nettoyés.", count)
+
+
 # ── DAG ───────────────────────────────────────────────────────────────────────
 
 with DAG(
     dag_id="dag_collecte_sociale",
-    description="Collecte horaire posts sociaux → Kafka → Bronze MinIO",
+    description="Collecte horaire posts sociaux → Kafka → Bronze → Silver MinIO",
     schedule_interval="@hourly",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=default_args,
-    tags=["grp3", "collecte", "bronze"],
+    tags=["grp3", "collecte", "bronze", "silver"],
 ) as dag:
 
     collect = PythonOperator(
@@ -110,4 +129,9 @@ with DAG(
         python_callable=task_kafka_to_bronze,
     )
 
-    collect >> kafka_to_bronze
+    bronze_to_silver = PythonOperator(
+        task_id="bronze_vers_silver",
+        python_callable=task_bronze_to_silver,
+    )
+
+    collect >> kafka_to_bronze >> bronze_to_silver
