@@ -127,41 +127,6 @@ def task_silver_to_nlp(**context):
     log.info("NLP : %d documents enrichis dans MongoDB.", count)
 
 
-# ── DAG ──────────────────────────────────────────────────────────────────────
-
-with DAG(
-    dag_id="dag_collecte_sociale",
-    description="Collecte horaire posts sociaux → Kafka → Bronze → Silver → NLP → MongoDB",
-    schedule_interval="@hourly",
-    start_date=datetime(2026, 1, 1),
-    catchup=False,
-    default_args=default_args,
-    tags=["grp3", "collecte", "bronze", "silver", "nlp"],
-) as dag:
-
-    collect = PythonOperator(
-        task_id="collecter_posts",
-        python_callable=task_collect,
-    )
-
-    kafka_to_bronze = PythonOperator(
-        task_id="kafka_vers_bronze",
-        python_callable=task_kafka_to_bronze,
-    )
-
-    bronze_to_silver = PythonOperator(
-        task_id="bronze_vers_silver",
-        python_callable=task_bronze_to_silver,
-    )
-
-    silver_to_nlp = PythonOperator(
-        task_id="silver_vers_nlp",
-        python_callable=task_silver_to_nlp,
-    )
-
-    collect >> kafka_to_bronze >> bronze_to_silver >> silver_to_nlp
-
-
 # ── Tâche 5 : NLP → Gold PostgreSQL (agrégats horaires) ─────────────────────
 
 def task_nlp_to_gold(**context):
@@ -198,7 +163,7 @@ def task_gold_summarize(**context):
     log.info("Summarizer : %d résumés générés.", count)
 
 
-# ── DAG (étendu avec les tâches Gold) ────────────────────────────────────────
+# ── DAG complet (6 tâches) ───────────────────────────────────────────────────
 
 with DAG(
     dag_id="dag_collecte_sociale",

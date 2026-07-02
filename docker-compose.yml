@@ -96,15 +96,15 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    # GPU NVIDIA — commenter le bloc deploy si pas de carte (qwen3:8b tourne en CPU, plus lent)
-    deploy:
-      resources:
-        reservations:
-          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    # GPU NVIDIA — décommenter si carte disponible (qwen3:8b tourne en CPU sinon, plus lent)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
 
   # ── Tampon d'ingestion ────────────────────────────────────────────────────
   kafka:
-    image: bitnamilegacy/kafka:3.7.0
+    image: bitnami/kafka:3.7.0
     container_name: grp3-kafka
     environment:
       KAFKA_CFG_NODE_ID: "1"
