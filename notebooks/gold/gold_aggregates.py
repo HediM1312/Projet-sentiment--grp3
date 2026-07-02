@@ -96,17 +96,6 @@ def upsert_match_events(conn, events: list[dict]) -> None:
     """Miroir du CSV dans la table match_events_gold pour les JOINs SQL."""
     if not events:
         return
-    sql = """
-        INSERT INTO match_events_gold
-            (match_id, event_type, event_minute, event_timestamp,
-             team_home, team_away, description)
-        VALUES %(match_id)s, %(event_type)s, %(event_minute)s, %(event_timestamp)s,
-               %(team_home)s, %(team_away)s, %(description)s)
-        ON CONFLICT (match_id, event_type, event_minute) DO UPDATE
-            SET event_timestamp = EXCLUDED.event_timestamp,
-                description     = EXCLUDED.description
-    """
-    # Utilisation d'executemany avec psycopg2 execute_values
     rows = []
     for ev in events:
         ts = _parse_iso(ev.get("event_timestamp"))

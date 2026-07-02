@@ -106,6 +106,9 @@ def process_records(records: list[dict]) -> list[dict]:
             continue
 
         lang = detect_language(text)
+        if lang not in ACCEPTED_LANGS:
+            continue  # on ne conserve que les 7 langues supportées
+
         text_normalized = normalize_text(text)
 
         cleaned.append({

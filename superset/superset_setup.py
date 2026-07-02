@@ -86,10 +86,13 @@ class SupersetClient:
             }
         )
 
-        resp = self.session.get(f"{self.base_url}/api/v1/security/csrf_token/")
-        resp.raise_for_status()
-        csrf = resp.json().get("result", "")
-        self.session.headers["X-CSRFToken"] = csrf
+        try:
+            resp = self.session.get(f"{self.base_url}/api/v1/security/csrf_token/")
+            if resp.ok:
+                csrf = resp.json().get("result", "")
+                self.session.headers["X-CSRFToken"] = csrf
+        except Exception:
+            pass  # JWT Bearer seul suffit pour l'API REST Superset 3.x+
         log.info("Superset : authentification OK.")
 
     def get(self, path: str, **kwargs) -> requests.Response:

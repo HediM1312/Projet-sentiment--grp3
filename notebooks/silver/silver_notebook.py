@@ -1,7 +1,7 @@
-# Databricks notebook source
 # Projet 3 — Sentiment & Tendances sociales — Groupe 3
 # Notebook Silver : Bronze → Silver (Déduplication, Langue, Normalisation)
 # Auteur : Hassan HOUSSEIN HOUMED
+# Version notebook exploratoire — le script de production est silver_cleaning.py
 
 # COMMAND ----------
 
@@ -26,8 +26,8 @@
 
 # COMMAND ----------
 
-# Installation des packages si nécessaire (Databricks cluster)
-# %pip install langdetect spacy pyarrow s3fs
+# Installation des packages (dans l'environnement Airflow, géré via requirements.txt)
+# pip install langdetect spacy pyarrow s3fs
 # import spacy; spacy.cli.download("fr_core_news_sm")
 
 import re
