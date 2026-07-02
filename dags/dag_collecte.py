@@ -4,6 +4,7 @@ DAG Airflow — Collecte horaire des posts sociaux
 - Consomme Kafka → MinIO Bronze (Parquet)
 - Nettoyage Silver : déduplication, détection langue, normalisation texte
 - NLP : sentiment Qwen3:8b + BERTopic → MongoDB
+- Gold : agrégats horaires PostgreSQL + résumés LLM (Personne 4 — Meissa MARA)
 """
 
 from __future__ import annotations
@@ -159,3 +160,88 @@ with DAG(
     )
 
     collect >> kafka_to_bronze >> bronze_to_silver >> silver_to_nlp
+
+
+# ── Tâche 5 : NLP → Gold PostgreSQL (agrégats horaires) ─────────────────────
+
+def task_nlp_to_gold(**context):
+    """Lit MongoDB, calcule les agrégats Gold et upserte dans PostgreSQL."""
+    import sys
+    sys.path.insert(0, "/opt/airflow/notebooks/gold")
+    from gold_aggregates import run_gold_for_partition
+
+    execution_date: datetime = context["execution_date"]
+    count = run_gold_for_partition(
+        execution_date.year,
+        execution_date.month,
+        execution_date.day,
+        execution_date.hour,
+    )
+    log.info("Gold : %d posts agrégés dans PostgreSQL.", count)
+
+
+# ── Tâche 6 : Résumés LLM (Gold → trend_summaries) ──────────────────────────
+
+def task_gold_summarize(**context):
+    """Génère les résumés de tendances via Qwen3:8b et les stocke dans PostgreSQL."""
+    import sys
+    sys.path.insert(0, "/opt/airflow/notebooks/gold")
+    from summarizer import run_summaries_for_partition
+
+    execution_date: datetime = context["execution_date"]
+    count = run_summaries_for_partition(
+        execution_date.year,
+        execution_date.month,
+        execution_date.day,
+        execution_date.hour,
+    )
+    log.info("Summarizer : %d résumés générés.", count)
+
+
+# ── DAG (étendu avec les tâches Gold) ────────────────────────────────────────
+
+with DAG(
+    dag_id="dag_collecte_sociale",
+    description=(
+        "Collecte horaire posts sociaux → Kafka → Bronze → Silver → NLP → MongoDB"
+        " → Gold PostgreSQL → Résumés LLM"
+    ),
+    schedule_interval="@hourly",
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    default_args=default_args,
+    tags=["grp3", "collecte", "bronze", "silver", "nlp", "gold"],
+) as dag:
+
+    collect = PythonOperator(
+        task_id="collecter_posts",
+        python_callable=task_collect,
+    )
+
+    kafka_to_bronze = PythonOperator(
+        task_id="kafka_vers_bronze",
+        python_callable=task_kafka_to_bronze,
+    )
+
+    bronze_to_silver = PythonOperator(
+        task_id="bronze_vers_silver",
+        python_callable=task_bronze_to_silver,
+    )
+
+    silver_to_nlp = PythonOperator(
+        task_id="silver_vers_nlp",
+        python_callable=task_silver_to_nlp,
+    )
+
+    nlp_to_gold = PythonOperator(
+        task_id="nlp_vers_gold",
+        python_callable=task_nlp_to_gold,
+    )
+
+    gold_summarize = PythonOperator(
+        task_id="gold_resumes_llm",
+        python_callable=task_gold_summarize,
+    )
+
+    # Pipeline complet
+    collect >> kafka_to_bronze >> bronze_to_silver >> silver_to_nlp >> nlp_to_gold >> gold_summarize

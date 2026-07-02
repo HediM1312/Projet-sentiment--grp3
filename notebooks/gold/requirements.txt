@@ -1,0 +1,11 @@
+# Dépendances — Module Gold (Personne 4 : Meissa MARA)
+# Agrégats PostgreSQL + Résumés LLM + Setup Superset
+
+# Base de données
+psycopg2-binary>=2.9.9
+
+# MongoDB (lecture des posts NLP)
+pymongo>=4.6.0
+
+# HTTP (appels Ollama + Superset API)
+requests>=2.31.0
