@@ -316,7 +316,7 @@ def upsert_hourly_sentiment(conn, rows: list[dict]) -> None:
                  total_posts, positive_count, neutral_count, negative_count,
                  avg_sentiment_score, top_topics, updated_at)
             VALUES %s
-            ON CONFLICT (hour_bucket, COALESCE(match_id, ''))
+            ON CONFLICT (hour_bucket, match_id)
             DO UPDATE SET
                 team_home           = EXCLUDED.team_home,
                 team_away           = EXCLUDED.team_away,
@@ -331,7 +331,7 @@ def upsert_hourly_sentiment(conn, rows: list[dict]) -> None:
             [
                 (
                     r["hour_bucket"],
-                    r["match_id"],
+                    r["match_id"] or "",
                     r["team_home"],
                     r["team_away"],
                     r["total_posts"],

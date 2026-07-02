@@ -71,12 +71,17 @@ def silver_path(year: int, month: int, day: int, hour: int) -> str:
     )
 
 
+def read_parquet_file(path: str, fs: s3fs.S3FileSystem):
+    """Lit un Parquet partitionné sans fusionner les colonnes hive du chemin."""
+    return pq.ParquetFile(path, filesystem=fs).read()
+
+
 def read_silver_partition(
     year: int, month: int, day: int, hour: int, fs: s3fs.S3FileSystem
 ) -> list[dict]:
     path = silver_path(year, month, day, hour)
     try:
-        table = pq.read_table(path, filesystem=fs)
+        table = read_parquet_file(path, fs)
     except Exception as exc:
         log.warning("Impossible de lire Silver %s : %s", path, exc)
         return []

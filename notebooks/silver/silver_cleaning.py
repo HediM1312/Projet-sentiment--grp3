@@ -38,7 +38,17 @@ _HASHTAG_RE = re.compile(r"#(\w+)")
 _SPACES_RE = re.compile(r"\s+")
 
 
-# ── Utilitaires ───────────────────────────────────────────────────────────────
+_PARTITION_COLS = frozenset({"year", "month", "day", "hour"})
+
+
+def read_parquet_file(path: str, fs: s3fs.S3FileSystem) -> pa.Table:
+    """Lit un fichier Parquet sans inférer les colonnes hive du chemin (évite conflits de types)."""
+    return pq.ParquetFile(path, filesystem=fs).read()
+
+
+def strip_partition_cols(record: dict) -> dict:
+    return {key: value for key, value in record.items() if key not in _PARTITION_COLS}
+
 
 def get_fs() -> s3fs.S3FileSystem:
     return s3fs.S3FileSystem(
@@ -99,7 +109,7 @@ def process_records(records: list[dict]) -> list[dict]:
         text_normalized = normalize_text(text)
 
         cleaned.append({
-            **record,
+            **strip_partition_cols(record),
             "text_normalized": text_normalized,
             "lang": lang,
             "silver_processed_at": datetime.now(timezone.utc).isoformat(),
@@ -122,7 +132,7 @@ def clean_partition(
     )
 
     try:
-        table = pq.read_table(bronze_path, filesystem=fs)
+        table = read_parquet_file(bronze_path, fs)
     except Exception as exc:
         log.warning("Impossible de lire Bronze %s : %s", bronze_path, exc)
         return 0

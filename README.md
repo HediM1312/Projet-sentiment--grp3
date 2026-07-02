@@ -10,22 +10,170 @@ Pipeline batch d'analyse de sentiment sur les réseaux sociaux pendant la Coupe 
 | Hassan HOUSSEIN HOUMED | Ingestion Bronze/Silver | `notebooks/silver/` |
 | Hedi MATHLOUTHI | NLP (Sentiment + Topics) | `notebooks/nlp/` |
 | Meissa MARA | Gold + Dashboard Superset | `notebooks/gold/`, `superset/` |
-## Démarrage rapide
-```bash
-# 1. Lancer le stack
+## Lancement (premier démarrage)
+
+> À faire **une seule fois** par machine (ou après suppression des volumes Docker).
+
+### 1. Démarrer l'infrastructure
+
+```powershell
+# Cloner le repo puis se placer à la racine du projet
+cd Projet-sentiment--grp3
+
+# Construire les images custom (Airflow + Superset avec driver PostgreSQL)
+docker compose build airflow superset
+
+# Lancer tous les services
 docker compose up -d
-# 2. Rebuild Airflow (deps NLP) + récupérer le modèle Qwen
-docker compose build airflow
-docker compose up -d
-docker exec -it grp3-ollama ollama pull qwen3:8b
-# 3. Accéder aux services
-# MinIO console  : http://localhost:9003
-# Airflow        : http://localhost:8080
-# Superset       : http://localhost:8089
-# Ollama         : http://localhost:11434
-# Kafka          : localhost:9092
-# MongoDB        : localhost:27017
+
+# Vérifier que tout tourne
+docker ps
 ```
+
+### 2. Télécharger le modèle NLP (Ollama)
+
+```powershell
+docker exec -it grp3-ollama ollama pull qwen3:8b
+docker exec grp3-ollama ollama list
+```
+
+### 3. Initialiser Superset (une seule fois)
+
+```powershell
+docker exec grp3-superset superset db upgrade
+docker exec grp3-superset superset fab create-admin --username admin --firstname Admin --lastname Admin --email admin@example.com --password admin
+docker exec grp3-superset superset init
+```
+
+> Si `User already exists admin` → c'est normal, l'admin existe déjà.
+
+### 4. Configurer le dashboard Superset
+
+```powershell
+pip install requests psycopg2-binary
+python superset/superset_setup.py
+```
+
+Le script crée la connexion PostgreSQL Gold, les datasets, les charts et le dashboard.
+
+### 5. Tables Gold PostgreSQL (si volume Postgres déjà existant)
+
+`init_gold.sql` ne s'exécute qu'au **premier** démarrage de PostgreSQL. Si les tables Gold manquent :
+
+```powershell
+Get-Content infra/postgres/init_gold.sql | docker exec -i grp3-postgres psql -U app -d gold
+```
+
+### 6. Accès aux services
+
+| Service | URL | Identifiants |
+|---------|-----|--------------|
+| **Airflow** | http://localhost:8080 | `admin` + mot de passe généré (voir ci-dessous) |
+| **Superset** | http://localhost:8089 | `admin` / `admin` |
+| **MinIO Console** | http://localhost:9003 | `minio` / `minio12345` |
+| **Ollama** | http://localhost:11434 | — |
+| **MongoDB** | localhost:27017 | `app` / `app12345` |
+| **PostgreSQL** | localhost:5432 | `app` / `app12345` (base `gold`) |
+
+**Mot de passe Airflow** (généré automatiquement au 1er démarrage) :
+
+```powershell
+docker logs grp3-airflow 2>&1 | Select-String "Login with username"
+```
+
+---
+
+## Utilisation Test
+
+### A. Lancer le pipeline complet
+
+```powershell
+# 1. S'assurer que le stack tourne
+docker compose up -d
+
+# 2. Ouvrir Airflow → activer le DAG → Trigger
+#    http://localhost:8080  →  dag_collecte_sociale  →  ▶ Trigger DAG
+```
+
+Pipeline exécuté :
+
+```
+collecter_posts → kafka_vers_bronze → bronze_vers_silver → silver_vers_nlp
+   → nlp_vers_gold → gold_resumes_llm
+```
+
+### B. Vérifier la couche NLP (MongoDB)
+
+```powershell
+docker exec grp3-mongo mongosh "mongodb://app:app12345@localhost:27017/sentiment?authSource=admin" --quiet --eval "db.enriched_posts.countDocuments()"
+
+docker exec grp3-mongo mongosh "mongodb://app:app12345@localhost:27017/sentiment?authSource=admin" --quiet --eval "db.enriched_posts.findOne({}, {text:0, text_normalized:0})"
+
+docker exec grp3-mongo mongosh "mongodb://app:app12345@localhost:27017/sentiment?authSource=admin" --quiet --eval "db.topic_aggregates.find().pretty()"
+```
+
+Résultat attendu : `countDocuments() > 0`, avec `sentiment_label`, `topic_label`, `topic_keywords`.
+
+### C. Vérifier la couche Gold (PostgreSQL)
+
+```powershell
+docker exec grp3-postgres psql -U app -d gold -c "SELECT hour_bucket, total_posts, avg_sentiment_score, positive_count, negative_count FROM hourly_sentiment LIMIT 5;"
+
+docker exec grp3-postgres psql -U app -d gold -c "SELECT match_id, hour_bucket, left(summary, 80) FROM trend_summaries LIMIT 5;"
+```
+
+### D. Tests manuels (hors Airflow)
+
+```powershell
+# NLP seul (partition horaire courante)
+docker exec grp3-airflow python /opt/airflow/notebooks/nlp/nlp_pipeline.py
+
+# NLP sur une heure précise (année, mois, jour, heure)
+docker exec grp3-airflow python -c "import sys; sys.path.insert(0,'/opt/airflow/notebooks/nlp'); from nlp_pipeline import run_nlp_for_partition; print(run_nlp_for_partition(2026, 7, 2, 12))"
+
+# Agrégats Gold (backfill depuis MongoDB)
+docker exec grp3-airflow python /opt/airflow/notebooks/gold/gold_aggregates.py --backfill
+
+# Résumés LLM pour un match
+docker exec grp3-airflow python /opt/airflow/notebooks/gold/summarizer.py --match wc2026-fr-pt
+```
+
+### E. Vérifier les fichiers intermédiaires (MinIO)
+
+```powershell
+docker exec grp3-minio mc alias set local http://localhost:9000 minio minio12345
+docker exec grp3-minio mc ls local/silver/social/ --recursive
+docker exec grp3-minio mc ls local/bronze/social/ --recursive
+```
+
+### F. Consulter le dashboard
+
+1. Ouvrir http://localhost:8089
+2. Se connecter : `admin` / `admin`
+3. Dashboard : **Sentiment & Tendances — Coupe du Monde**
+
+Contenu :
+- **Courbe** : sentiment moyen vs timeline horaire
+- **Heatmap** : sentiment par équipe × heure
+- **Barres empilées** : volume posts positifs / neutres / négatifs
+- **Tableau** : résumés narratifs LLM
+
+> Les graphiques restent vides tant que le pipeline n'a pas produit de données (MongoDB → Gold).
+
+### G. Dépannage rapide
+
+```powershell
+# Logs d'une tâche Airflow (ex. NLP)
+docker logs grp3-airflow --tail 100
+
+# Vérifier qu'Ollama répond
+curl http://localhost:11434/api/tags
+
+# Reconfigurer Superset si besoin
+python superset/superset_setup.py
+```
+
+---
 ## Services Docker
 | Service | Port local | Usage |
 |---------|-----------|-------|
@@ -93,20 +241,11 @@ collecter_posts → kafka_vers_bronze → bronze_vers_silver → silver_vers_nlp
 
 ### Configurer Superset
 
-```bash
-# Créer l'admin Superset (une seule fois)
-docker exec -it grp3-superset superset fab create-admin \
-    --username admin --firstname Admin --lastname Admin \
-    --email admin@example.com --password admin
+> Déjà couvert dans la section **Lancement** (étapes 3 et 4). Relancer uniquement si besoin :
 
-# Initialiser la base Superset
-docker exec -it grp3-superset superset db upgrade
-docker exec -it grp3-superset superset init
-
-# Lancer le script de setup automatique (crée DB, datasets, charts, dashboard)
+```powershell
 pip install requests psycopg2-binary
 python superset/superset_setup.py
-# PG_HOST=postgres par défaut (hostname Docker vu par Superset)
 ```
 
 Le dashboard **"Sentiment & Tendances — Coupe du Monde"** est alors accessible sur `http://localhost:8089`.
@@ -119,13 +258,15 @@ Il contient :
 
 ### Utilisation manuelle (hors Airflow)
 
-```bash
+> Voir aussi la section **Utilisation Test** (partie D).
+
+```powershell
 # Agrégats Gold pour une heure donnée
-python notebooks/gold/gold_aggregates.py --hour 2026-07-01T14:00:00+00:00
+docker exec grp3-airflow python /opt/airflow/notebooks/gold/gold_aggregates.py --hour 2026-07-01T14:00:00+00:00
 
 # Backfill complet
-python notebooks/gold/gold_aggregates.py --backfill
+docker exec grp3-airflow python /opt/airflow/notebooks/gold/gold_aggregates.py --backfill
 
 # Générer les résumés LLM
-python notebooks/gold/summarizer.py --match wc2026-fr-pt
+docker exec grp3-airflow python /opt/airflow/notebooks/gold/summarizer.py --match wc2026-fr-pt
 ```
