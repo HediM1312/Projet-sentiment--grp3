@@ -41,6 +41,8 @@ services:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+      # init_gold.sql est exécuté automatiquement au premier démarrage
+      - ./infra/postgres/init_gold.sql:/docker-entrypoint-initdb.d/init_gold.sql:ro
 
   # ── Orchestrateur ────────────────────────────────────────────────────────
   airflow:
@@ -59,6 +61,9 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: qwen3:8b
       MATCH_EVENTS_PATH: /opt/airflow/data/match_events.csv
+      # ── Gold (Personne 4) ──
+      PG_DSN: postgresql://app:app12345@postgres:5432/gold
+      TOP_TOPICS_K: "5"
     ports:
       - "8080:8080"
     volumes:
@@ -66,6 +71,7 @@ services:
       - ./collector:/opt/airflow/collector
       - ./notebooks:/opt/airflow/notebooks
       - ./data:/opt/airflow/data
+      - ./superset:/opt/airflow/superset
     command: standalone
 
   # ── Dashboard ─────────────────────────────────────────────────────────────

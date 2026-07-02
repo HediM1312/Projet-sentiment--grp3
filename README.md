@@ -51,3 +51,80 @@ Variables d'environnement (déjà configurées dans `docker-compose.yml`) :
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | API Ollama |
 | `MONGO_URI` | `mongodb://app:app12345@mongo:27017/?authSource=admin` | MongoDB |
 | `MATCH_EVENTS_PATH` | `/opt/airflow/data/match_events.csv` | CSV événements match |
+
+## Module Gold + Dashboard Superset (Personne 4 — Meissa MARA)
+
+### Fichiers produits
+
+| Fichier | Rôle |
+|---------|------|
+| `infra/postgres/init_gold.sql` | DDL des tables Gold (exécuté au 1er démarrage PostgreSQL) |
+| `notebooks/gold/gold_aggregates.py` | Agrégats horaires MongoDB → PostgreSQL |
+| `notebooks/gold/summarizer.py` | Résumés narratifs LLM (Qwen3:8b via Ollama) → PostgreSQL |
+| `superset/superset_setup.py` | Configuration automatique du dashboard Superset via API |
+| `notebooks/gold/requirements.txt` | Dépendances Python du module Gold |
+
+### Tables Gold (PostgreSQL — base `gold`)
+
+| Table | Description |
+|-------|-------------|
+| `match_events_gold` | Miroir du CSV `data/match_events.csv` pour les JOINs SQL |
+| `hourly_sentiment` | Agrégats horaires : volume, sentiment moyen, top topics, ratios |
+| `team_sentiment_heatmap` | Sentiment par équipe × heure (source heatmap Superset) |
+| `trend_summaries` | Résumés narratifs LLM par heure/match |
+| `v_sentiment_vs_events` | Vue : JOIN hourly_sentiment × match_events_gold |
+
+### Pipeline Airflow (tâches Gold ajoutées)
+
+```
+collecter_posts → kafka_vers_bronze → bronze_vers_silver → silver_vers_nlp
+   → nlp_vers_gold → gold_resumes_llm
+```
+
+- **`nlp_vers_gold`** : lit MongoDB, calcule les agrégats `hourly_sentiment` et `team_sentiment_heatmap`, upserte dans PostgreSQL.
+- **`gold_resumes_llm`** : pour chaque agrégat sans résumé, appelle Qwen3:8b (Ollama) et stocke dans `trend_summaries`.
+
+### Variables d'environnement Gold
+
+| Variable | Défaut | Description |
+|----------|--------|-------------|
+| `PG_DSN` | `postgresql://app:app12345@postgres:5432/gold` | Connexion PostgreSQL |
+| `TOP_TOPICS_K` | `5` | Nombre de top topics dans les agrégats |
+
+### Configurer Superset
+
+```bash
+# Créer l'admin Superset (une seule fois)
+docker exec -it grp3-superset superset fab create-admin \
+    --username admin --firstname Admin --lastname Admin \
+    --email admin@example.com --password admin
+
+# Initialiser la base Superset
+docker exec -it grp3-superset superset db upgrade
+docker exec -it grp3-superset superset init
+
+# Lancer le script de setup automatique (crée DB, datasets, charts, dashboard)
+pip install requests psycopg2-binary
+SUPERSET_URL=http://localhost:8089 python superset/superset_setup.py
+```
+
+Le dashboard **"Sentiment & Tendances — Coupe du Monde"** est alors accessible sur `http://localhost:8089`.
+
+Il contient :
+- **Courbe** : sentiment moyen vs timeline horaire (avec ligne neutre à 0.5)
+- **Heatmap** : sentiment par équipe × heure
+- **Barres empilées** : volume de posts (positifs / neutres / négatifs) par heure
+- **Tableau** : résumés narratifs LLM par tranche horaire
+
+### Utilisation manuelle (hors Airflow)
+
+```bash
+# Agrégats Gold pour une heure donnée
+python notebooks/gold/gold_aggregates.py --hour 2026-07-01T14:00:00+00:00
+
+# Backfill complet
+python notebooks/gold/gold_aggregates.py --backfill
+
+# Générer les résumés LLM
+python notebooks/gold/summarizer.py --match wc2026-fr-pt
+```
