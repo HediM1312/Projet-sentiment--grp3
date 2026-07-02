@@ -42,7 +42,8 @@ SUPERSET_URL      = os.getenv("SUPERSET_URL", "http://localhost:8089")
 SUPERSET_ADMIN    = os.getenv("SUPERSET_ADMIN", "admin")
 SUPERSET_PASSWORD = os.getenv("SUPERSET_PASSWORD", "admin")
 
-PG_HOST     = os.getenv("PG_HOST", "localhost")
+# Hostname vu depuis le conteneur Superset (pas localhost)
+PG_HOST     = os.getenv("PG_HOST", "postgres")
 PG_PORT     = int(os.getenv("PG_PORT", "5432"))
 PG_DB       = os.getenv("PG_DB", "gold")
 PG_USER     = os.getenv("PG_USER", "app")
@@ -61,11 +62,7 @@ class SupersetClient:
         self._login(username, password)
 
     def _login(self, username: str, password: str) -> None:
-        # Récupération du token CSRF
-        resp = self.session.get(f"{self.base_url}/api/v1/security/csrf_token/")
-        resp.raise_for_status()
-        csrf = resp.json().get("result", "")
-
+        # Superset récent : login JWT d'abord, puis CSRF avec Bearer token
         resp = self.session.post(
             f"{self.base_url}/api/v1/security/login",
             json={
@@ -74,7 +71,7 @@ class SupersetClient:
                 "provider":  "db",
                 "refresh":   True,
             },
-            headers={"X-CSRFToken": csrf, "Referer": self.base_url},
+            headers={"Referer": self.base_url},
         )
         resp.raise_for_status()
         tokens = resp.json()
@@ -85,10 +82,14 @@ class SupersetClient:
         self.session.headers.update(
             {
                 "Authorization": f"Bearer {access_token}",
-                "X-CSRFToken":   csrf,
                 "Referer":       self.base_url,
             }
         )
+
+        resp = self.session.get(f"{self.base_url}/api/v1/security/csrf_token/")
+        resp.raise_for_status()
+        csrf = resp.json().get("result", "")
+        self.session.headers["X-CSRFToken"] = csrf
         log.info("Superset : authentification OK.")
 
     def get(self, path: str, **kwargs) -> requests.Response:
@@ -124,7 +125,9 @@ def get_or_create_database(client: SupersetClient) -> int:
         "extra": json.dumps({"allows_virtual_table_explore": True}),
     }
     resp = client.post("/api/v1/database/", json=payload)
-    resp.raise_for_status()
+    if not resp.ok:
+        log.error("Création database Superset échouée (%s) : %s", resp.status_code, resp.text[:500])
+        resp.raise_for_status()
     db_id = resp.json()["id"]
     log.info("Database Superset créée : id=%d", db_id)
     return db_id
@@ -170,8 +173,8 @@ def get_or_create_dataset(client: SupersetClient, db_id: int, ds: dict) -> int:
         params={
             "q": json.dumps({
                 "filters": [
-                    {"col": "table_name", "opr": "eq", "val": table_name},
-                    {"col": "database", "opr": "rel_o_m", "val": db_id},
+                    {"col": "table_name", "opr": "eq", "value": table_name},
+                    {"col": "database", "opr": "rel_o_m", "value": db_id},
                 ]
             })
         },
@@ -186,7 +189,6 @@ def get_or_create_dataset(client: SupersetClient, db_id: int, ds: dict) -> int:
         "database":   db_id,
         "table_name": table_name,
         "schema":     ds.get("schema", "public"),
-        "description": ds.get("description", ""),
     }
     resp = client.post("/api/v1/dataset/", json=payload)
     resp.raise_for_status()
@@ -365,9 +367,8 @@ def create_dashboard(client: SupersetClient, chart_ids: list[int]) -> int:
 
     payload = {
         "dashboard_title": DASHBOARD_TITLE,
-        "status":          "published",
         "position_json":   json.dumps(position_json),
-        "metadata":        json.dumps({"color_scheme": "supersetColors", "refresh_frequency": 3600}),
+        "json_metadata":   json.dumps({"color_scheme": "supersetColors", "refresh_frequency": 3600}),
     }
     resp = client.post("/api/v1/dashboard/", json=payload)
     resp.raise_for_status()

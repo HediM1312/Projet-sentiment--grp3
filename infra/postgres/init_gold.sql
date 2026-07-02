@@ -30,7 +30,7 @@ COMMENT ON TABLE match_events_gold IS
 CREATE TABLE IF NOT EXISTS hourly_sentiment (
     id                  SERIAL        PRIMARY KEY,
     hour_bucket         TIMESTAMPTZ   NOT NULL,  -- trunc à l'heure (DATE_TRUNC('hour', ...)
-    match_id            TEXT,
+    match_id            TEXT          NOT NULL DEFAULT '',
     team_home           TEXT,
     team_away           TEXT,
     total_posts         INTEGER       NOT NULL DEFAULT 0,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS hourly_sentiment (
     top_topics          JSONB,                   -- [{topic_label, count}, ...]
     created_at          TIMESTAMPTZ   DEFAULT NOW(),
     updated_at          TIMESTAMPTZ   DEFAULT NOW(),
-    UNIQUE (hour_bucket, COALESCE(match_id, ''))
+    UNIQUE (hour_bucket, match_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_hourly_sentiment_hour ON hourly_sentiment (hour_bucket);

@@ -76,8 +76,11 @@ services:
 
   # ── Dashboard ─────────────────────────────────────────────────────────────
   superset:
-    image: apache/superset:latest
+    build:
+      context: ./infra/superset
+      dockerfile: Dockerfile
     container_name: grp3-superset
+    depends_on: [postgres]
     environment:
       SUPERSET_SECRET_KEY: grp3_change_me
     ports:

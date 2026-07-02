@@ -1,0 +1,9 @@
+FROM apache/superset:latest
+
+USER root
+# Driver PostgreSQL requis pour connecter Superset à la base Gold
+RUN /usr/local/bin/pip install --no-cache-dir \
+    --target=/app/.venv/lib/python3.10/site-packages \
+    psycopg2-binary
+
+USER superset

@@ -105,7 +105,8 @@ docker exec -it grp3-superset superset init
 
 # Lancer le script de setup automatique (crée DB, datasets, charts, dashboard)
 pip install requests psycopg2-binary
-SUPERSET_URL=http://localhost:8089 python superset/superset_setup.py
+python superset/superset_setup.py
+# PG_HOST=postgres par défaut (hostname Docker vu par Superset)
 ```
 
 Le dashboard **"Sentiment & Tendances — Coupe du Monde"** est alors accessible sur `http://localhost:8089`.
