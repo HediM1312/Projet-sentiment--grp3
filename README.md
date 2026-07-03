@@ -98,105 +98,92 @@ docker logs grp3-airflow 2>&1 | grep "Login with username"
 
 ---
 
-## DÉMONSTRATION RAPIDE (pour la soutenance)
+## DÉMONSTRATION (pour la soutenance)
 
-> Ces commandes montrent le pipeline de bout en bout avec des données représentatives
-> d'un match France vs Portugal (Coupe du Monde 2026).
+Le pipeline complet est : **Kafka → Bronze → Silver → NLP → Gold → Superset**.
+La démo utilise ce même pipeline — les données entrent par Kafka et sortent dans Superset.
 
-### Étape 1 — Vérifier que les services tournent
+---
+
+### AVANT LA SOUTENANCE — Préparer les données (à faire la veille ou le matin)
+
+#### 1. Injecter des posts bruts dans Kafka
+
+Le script `demo/inject_kafka_posts.py` publie 31 posts (fr/en/es/de, positifs/neutres/négatifs,
+dont 1 doublon intentionnel) dans le topic `social-raw` — exactement comme le ferait le collecteur.
+
+```bash
+# Copier et exécuter à l'intérieur du réseau Docker
+docker cp demo/inject_kafka_posts.py grp3-airflow:/tmp/inject_kafka_posts.py
+docker exec grp3-airflow python /tmp/inject_kafka_posts.py
+```
+
+#### 2. Déclencher le pipeline complet via Airflow
+
+```bash
+# Option A — interface Airflow (recommandé)
+# → http://localhost:8080  →  dag_collecte_sociale  →  ▶ Trigger DAG
+# Le DAG enchaîne : kafka_vers_bronze → bronze_vers_silver → silver_vers_nlp → nlp_vers_gold → gold_resumes_llm
+# Durée : ~5 min (NLP Qwen3:8b inclus)
+```
+
+```bash
+# Option B — manuellement étape par étape (si le DAG ne se déclenche pas)
+docker exec grp3-airflow python /opt/airflow/notebooks/silver/silver_cleaning.py
+docker exec grp3-airflow python /opt/airflow/notebooks/nlp/nlp_pipeline.py
+docker exec grp3-airflow python /opt/airflow/notebooks/gold/gold_aggregates.py
+```
+
+#### 3. Vérifier que les données sont dans Gold
+
+```bash
+docker exec grp3-postgres psql -U app -d gold -c \
+  "SELECT hour_bucket, total_posts, avg_sentiment_score FROM hourly_sentiment ORDER BY hour_bucket;"
+```
+
+---
+
+### PENDANT LA DÉMO (~2 min)
+
+#### Étape 1 — Services actifs
 
 ```bash
 docker ps --format "table {{.Names}}\t{{.Status}}" | grep grp3
 ```
 
-Résultat attendu : 7 conteneurs `Up` (postgres, minio, kafka, mongo, superset, airflow, ollama).
-
-### Étape 2 — Injecter des données de démo (France 2-0 Portugal)
+#### Étape 2 — Données Gold traitées par le pipeline (PostgreSQL)
 
 ```bash
-# Injection directe dans PostgreSQL Gold (données du match du 02/07/2026)
-docker exec grp3-postgres psql -U app -d gold -c "
-INSERT INTO match_events_gold (match_id, event_type, event_minute, event_timestamp, team_home, team_away, description)
-VALUES
-  ('wc2026-fr-pt','kickoff', 0,'2026-07-02 13:00:00+00','France','Portugal','Coup d''envoi'),
-  ('wc2026-fr-pt','goal',   34,'2026-07-02 13:34:00+00','France','Portugal','But de Mbappé (34e)'),
-  ('wc2026-fr-pt','goal',   78,'2026-07-02 14:18:00+00','France','Portugal','But de Dembélé (78e)'),
-  ('wc2026-fr-pt','fulltime',90,'2026-07-02 14:45:00+00','France','Portugal','Fin du match (2-0)')
-ON CONFLICT (match_id, event_type, event_minute) DO NOTHING;
-"
-
-docker exec grp3-postgres psql -U app -d gold -c "
-INSERT INTO hourly_sentiment (hour_bucket, match_id, team_home, team_away, total_posts, positive_count, neutral_count, negative_count, avg_sentiment_score, top_topics)
-VALUES
-  ('2026-07-02 13:00+00','wc2026-fr-pt','France','Portugal', 620,310,205,105,0.61,'[{\"topic\":\"coup_envoi\",\"count\":180}]'),
-  ('2026-07-02 14:00+00','wc2026-fr-pt','France','Portugal', 890,530,240,120,0.77,'[{\"topic\":\"but_mbappe\",\"count\":310}]'),
-  ('2026-07-02 16:00+00','wc2026-fr-pt','France','Portugal',1100,720,240,140,0.83,'[{\"topic\":\"victoire\",\"count\":410}]')
-ON CONFLICT (hour_bucket, match_id) DO UPDATE SET
-  total_posts=EXCLUDED.total_posts, avg_sentiment_score=EXCLUDED.avg_sentiment_score;
-"
+docker exec grp3-postgres psql -U app -d gold -c \
+  "SELECT hour_bucket, total_posts, avg_sentiment_score FROM hourly_sentiment ORDER BY hour_bucket;"
 ```
 
-### Étape 3 — Vérifier les données Gold (PostgreSQL)
+#### Étape 3 — Dashboard Superset
 
-```bash
-# Agrégats horaires de sentiment
-docker exec grp3-postgres psql -U app -d gold -c "
-SELECT hour_bucket, total_posts, avg_sentiment_score, positive_count, negative_count
-FROM hourly_sentiment
-ORDER BY hour_bucket;"
-
-# Événements du match
-docker exec grp3-postgres psql -U app -d gold -c "
-SELECT event_type, event_minute, description FROM match_events_gold ORDER BY event_minute;"
-
-# Vue de corrélation sentiment × événements
-docker exec grp3-postgres psql -U app -d gold -c "
-SELECT hour_bucket, avg_sentiment_score, event_type, event_minute
-FROM v_sentiment_vs_events
-ORDER BY hour_bucket, event_minute;"
+```
+http://localhost:8089   →   admin / admin   →   Sentiment & Tendances — Coupe du Monde
 ```
 
-### Étape 4 — Vérifier le pipeline Silver (PyArrow + MinIO)
+---
+
+### Vérifications intermédiaires (Bronze et Silver dans MinIO)
 
 ```bash
-# Lancer le collecteur manuellement (publie dans Kafka)
-docker exec grp3-airflow python /opt/airflow/collector/collector.py
-
-# Vérifier les fichiers Parquet dans MinIO Bronze
+# Fichiers Parquet Bronze (posts bruts partitionnés par heure)
 docker exec grp3-minio mc alias set local http://minio:9000 minio minio12345 2>/dev/null
 docker exec grp3-minio mc ls local/bronze/social/ --recursive
 
-# Vérifier Silver
+# Fichiers Parquet Silver (nettoyés : sans doublons, filtre 7 langues, normalisés)
 docker exec grp3-minio mc ls local/silver/social/ --recursive
 ```
 
-### Étape 5 — Dashboard Superset en direct
+### Posts enrichis dans MongoDB (après NLP)
 
 ```bash
-# Reconfigurer le dashboard si besoin (connexion + datasets + charts)
-python superset/superset_setup.py
+docker exec grp3-mongo mongosh \
+  "mongodb://app:app12345@localhost:27017/sentiment?authSource=admin" \
+  --quiet --eval "db.enriched_posts.countDocuments()"
 
-# Ouvrir le dashboard
-# → http://localhost:8089  |  admin / admin
-# → Dashboard : "Sentiment & Tendances — Coupe du Monde"
-```
-
-Le dashboard contient :
-- **Courbe** : sentiment moyen par heure (monte après chaque but)
-- **Barres empilées** : volume posts Positifs / Neutres / Négatifs par heure
-- **Heatmap** : sentiment par équipe × heure (France positif, Portugal négatif)
-- **Tableau** : résumés narratifs LLM générés par Qwen3:8b
-
-### Étape 6 — Pipeline NLP complet (optionnel, ~5 min avec Ollama)
-
-```bash
-# Déclencher le DAG complet depuis Airflow
-# → http://localhost:8080  →  dag_collecte_sociale  →  ▶ Trigger DAG
-
-# Ou lancer le NLP manuellement sur la partition courante
-docker exec grp3-airflow python /opt/airflow/notebooks/nlp/nlp_pipeline.py
-
-# Vérifier les posts enrichis dans MongoDB
 docker exec grp3-mongo mongosh \
   "mongodb://app:app12345@localhost:27017/sentiment?authSource=admin" \
   --quiet --eval "db.enriched_posts.findOne({}, {text:0, text_normalized:0})"
